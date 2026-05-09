@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import sqlite3
 import pandas as pd
 import uvicorn
 
 app = FastAPI()
 
-# Allow React (running on a different port) to talk to Python
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,36 +14,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def init_db():
-    conn = sqlite3.connect('students.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS performance 
-                     (id INTEGER PRIMARY KEY, subject TEXT, marks INTEGER, attendance INTEGER)''')
-    
-    # Check if we need to insert initial data
-    cursor.execute("SELECT COUNT(*) FROM performance")
-    if cursor.fetchone()[0] == 0:
-        data = [('Math', 85, 90), ('Physics', 78, 82), ('CS', 95, 95), ('English', 72, 75), ('Chemistry', 80, 88)]
-        cursor.executemany("INSERT INTO performance (subject, marks, attendance) VALUES (?, ?, ?)", data)
-        conn.commit()
-    conn.close()
+class StudentData(BaseModel):
+    name: str
+    subject: str
+    marks: int
+    attendance: int
+
+def get_db():
+    conn = sqlite3.connect('students.db', check_same_thread=False)
+    return conn
 
 @app.on_event("startup")
-def startup():
-    init_db()
+def init_db():
+    conn = get_db()
+    conn.execute('''CREATE TABLE IF NOT EXISTS performance 
+                     (id INTEGER PRIMARY KEY, name TEXT, subject TEXT, marks INTEGER, attendance INTEGER)''')
+    conn.commit()
+    conn.close()
+
+@app.post("/api/add_student")
+def add_student(data: StudentData):
+    conn = get_db()
+    conn.execute("INSERT INTO performance (name, subject, marks, attendance) VALUES (?, ?, ?, ?)", 
+                 (data.name, data.subject, data.marks, data.attendance))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
 
 @app.get("/api/stats")
 def get_stats():
-    conn = sqlite3.connect('students.db')
-    # Use Pandas for the 'Analysis' part of your project
+    conn = get_db()
     df = pd.read_sql_query("SELECT * FROM performance", conn)
     conn.close()
     
+    if df.empty:
+        return {"chartData": [], "avg_marks": 0, "avg_attendance": 0}
+
     return {
         "chartData": df.to_dict(orient='records'),
-        "avg_marks": round(df['marks'].mean(), 2),
-        "avg_attendance": round(df['attendance'].mean(), 2),
-        "total_subjects": len(df)
+        "avg_marks": int(df['marks'].mean()),
+        "avg_attendance": int(df['attendance'].mean())
     }
 
 if __name__ == "__main__":
